@@ -9,7 +9,7 @@ from passlib.context import CryptContext
 from contextlib import asynccontextmanager
 from app.database import create_all_tables, dispose_engine, get_db
 from app import models
-
+from sqlalchemy.orm import Session
 
 # to get a string like this run:
 # openssl rand -hex 32
@@ -43,13 +43,14 @@ def get_password_hash(password):
 
 
 def get_user(db, username: str):
-    if username in db:
-        user_dict = db[username]
-        return schemas.UserInDB(**user_dict)
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if user:
+        return schemas.UserInDB(**user.__dict__)
+    return None
 
 
-def authenticate_user(fake_db, username: str, password: str):
-    user = get_user(fake_db, username)
+def authenticate_user(db, username: str, password: str):
+    user = get_user(db, username)
     if not user:
         return False
     if not verify_password(password, user.hashed_password):
@@ -68,7 +69,8 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     return encoded_jwt
 
 
-async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
+async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)],
+                           db: Annotated[Session, Depends(get_db)]):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -82,7 +84,7 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
         token_data = schemas.TokenData(username=username)
     except InvalidTokenError:
         raise credentials_exception
-    user = get_user(fake_users_db, username=token_data.username)
+    user = get_user(db, username=token_data.username)
     if user is None:
         raise credentials_exception
     return user
@@ -104,8 +106,9 @@ async def health() -> dict[str, str]:
 @app.post("/token")
 async def login_for_access_token(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+        db: Annotated[Session, Depends(get_db)]
 ) -> schemas.Token:
-    user = authenticate_user(fake_users_db, form_data.username, form_data.password)
+    user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
