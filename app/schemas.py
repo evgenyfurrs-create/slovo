@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Token(BaseModel):
@@ -11,11 +11,14 @@ class TokenData(BaseModel):
 
 
 class User(BaseModel):
-    username: str
+    username: str = Field(max_length=50)
     email: str | None = None
     full_name: str | None = None
-    disabled: bool | None = None
+    disabled: bool = True
 
 
 class UserInDB(User):
     hashed_password: str
+
+class UserCreate(User):
+    password: str

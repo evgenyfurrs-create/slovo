@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 import jwt
@@ -10,17 +11,16 @@ from contextlib import asynccontextmanager
 from app.database import create_all_tables, dispose_engine, get_db
 from app import models
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
 
+load_dotenv()
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
 # to get a string like this run:
 # openssl rand -hex 32
-SECRET_KEY = "4505f2c94e68bf82d26bf1f3be16954446fecbe4bf54fa21eedd68af3ee855d4"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 @asynccontextmanager
@@ -129,8 +129,53 @@ async def read_users_me(
     return current_user
 
 
-@app.get("/users/me/items/")
-async def read_own_items(
-    current_user: Annotated[schemas.User, Depends(get_current_active_user)],
-):
-    return [{"item_id": "Foo", "owner": current_user.username}]
+@app.get("/users", response_model=list[schemas.User])
+async def list_users(current_user: Annotated[schemas.User, Depends(get_current_active_user)],
+                    db: Annotated[Session, Depends(get_db)]):
+    users = db.query(models.User).order_by(models.User.id.asc()).all()
+    return users
+
+
+@app.post("/users", response_model=str, status_code=status.HTTP_201_CREATED)
+async def create_user_endpoint(
+    payload: schemas.UserCreate,
+    db: Annotated[Session, Depends(get_db)],
+    ):
+    existing_user_by_username = (
+        db.query(models.User).filter(models.User.username == payload.username).first()
+    )
+    if existing_user_by_username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already registered",
+        )
+
+    # Check for existing email
+    existing_user_by_email = (
+        db.query(models.User).filter(models.User.email == payload.email).first()
+    )
+    if existing_user_by_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+
+    hashed_password = get_password_hash(payload.password)
+
+    new_user = models.User(
+        username=payload.username,
+        full_name=payload.full_name,
+        hashed_password=hashed_password,
+        email=payload.email,
+        disabled=payload.disabled,
+    )
+    db.add(new_user)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(new_user)
+
+    # Return without hashed_password per response_model
+    return f"{payload.username} have been created"
